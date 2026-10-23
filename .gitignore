@@ -1,0 +1,30 @@
+# Virtual Environments
+backend/venv/
+venv/
+.venv/
+env/
+
+# Python cache & artifacts
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.sqlite
+*.sqlite3
+
+# Node & Frontend
+frontend/node_modules/
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Huggingface & Model downloads
+.cache/
+hf_cache/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
