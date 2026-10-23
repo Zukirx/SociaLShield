@@ -17,9 +17,9 @@ KNOWN_HOAX_PATTERNS = [
 ]
 
 SENSATIONAL_HOAX_MARKERS = [
-    "breaking news:", "urgent warning", "shocking truth", "government admits",
-    "hidden truth", "they don't want you to know", "secret exposed",
-    "miracle cure", "illuminati", "deep state depopulation"
+    "shocking secret exposed", "government admits secret",
+    "hidden truth they don't want you to know", "secret miracle cure",
+    "illuminati depopulation", "deep state depopulation"
 ]
 
 
@@ -46,7 +46,7 @@ def verify_claim(claim: str):
     analyzed_sources = []
 
     for source in sources:
-        stance  = classifier.classify_stance(clean_claim, source["snippet"])
+        stance  = classifier.classify_stance(clean_claim, source["snippet"], title=source.get("title", ""))
         weight  = source.get("credibility_weight", 0.5)
 
         if stance == "SUPPORTS":
@@ -75,13 +75,18 @@ def verify_claim(claim: str):
         refuted_count = max(refuted_count, 1)
 
     # 2. Determine explicit Veracity Verdict and consensus score (s_fact)
-    if is_known_hoax or (refuted_count > 0 and weighted_refute >= weighted_support):
-        s_fact = 0.05 if is_known_hoax else max(0.05, round(0.18 - (weighted_refute * 0.04), 4))
+    if is_known_hoax:
+        s_fact = 0.05
         verdict = "FAKE"
         verdict_label = "🚨 FAKE NEWS / FABRICATED"
-        verdict_description = f"Refuted by {refuted_count} credible source(s) or identified as a known viral hoax."
-    elif supported_count > 0 and refuted_count == 0:
-        s_fact = min(0.95, round(0.72 + (weighted_support * 0.08), 4))
+        verdict_description = "Identified as a known viral hoax / fabricated conspiracy."
+    elif refuted_count > 0 and (supported_count == 0 or weighted_refute >= weighted_support * 1.5):
+        s_fact = max(0.05, round(0.18 - (weighted_refute * 0.04), 4))
+        verdict = "FAKE"
+        verdict_label = "🚨 FAKE NEWS / DEBUNKED"
+        verdict_description = f"Refuted and debunked by {refuted_count} credible source(s)."
+    elif supported_count > 0 and (refuted_count == 0 or weighted_support >= weighted_refute):
+        s_fact = min(0.96, round(0.75 + (weighted_support * 0.05), 4))
         verdict = "VERIFIED"
         verdict_label = "✅ VERIFIED FACT"
         verdict_description = f"Corroborated by {supported_count} reputable news organization(s)."
