@@ -41,6 +41,17 @@ app.add_middleware(
 )
 
 
+@app.get("/health")
+@app.get("/")
+async def health_check():
+    return {
+        "status": "ok",
+        "version": "3.0.0",
+        "multimodal_available": MULTIMODAL_AVAILABLE,
+        "service": "SocialShield AI API",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------

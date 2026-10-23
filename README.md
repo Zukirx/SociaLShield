@@ -1,4 +1,4 @@
-# 🛡️ SocialShield AI: Misinformation Spread & Spillover Prediction Engine
+# 🛡️ SocialShield AI: Multimodal Misinformation Detection & Spillover Prediction
 
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.103.1-009688?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
@@ -6,9 +6,14 @@
 [![Vite](https://img.shields.io/badge/Vite-8.2-646CFF?style=flat&logo=vite&logoColor=white)](https://vitejs.dev/)
 [![TailwindCSS](https://img.shields.io/badge/TailwindCSS-v4-06B6D4?style=flat&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
 [![XGBoost](https://img.shields.io/badge/XGBoost-1.7.6-EB5424?style=flat)](https://xgboost.readthedocs.io/)
+[![Whisper](https://img.shields.io/badge/Whisper-ASR-412991?style=flat)](https://github.com/openai/whisper)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
 
-**SocialShield AI** is an end-to-end intelligence platform engineered to identify misinformation across social networks (**Instagram Reels/Posts, X/Twitter, Facebook Groups, and Digital Media**) and predict its **diffusion trajectory** before it infiltrates **vulnerable local newsrooms, regional language portals, and mainstream broadcast channels**.
+> **v3.0.0** – Multimodal Edition
+
+**SocialShield AI** is an end-to-end intelligence platform engineered to identify misinformation across social networks (**Instagram Reels/Posts, X/Twitter, Facebook, YouTube Videos & Shorts**) and predict its **diffusion trajectory** before it infiltrates **vulnerable local newsrooms, regional language portals, and mainstream broadcast channels**.
+
+The system goes beyond reading text captions — it **sees the image**, **hears the audio**, and **reads every on-screen overlay** before running cross-source fact-verification.
 
 ---
 
@@ -42,11 +47,25 @@ Traditional fact-checking systems only classify veracity retrospectively. **Soci
 
 ## ⚡ Key Capabilities
 
-### 1. Multi-Platform Ingestion & Auto-Extraction
-- **Instagram**: Captures reel/post URLs, captions, engagement ratios (likes, views, shares).
-- **X (Twitter)**: Extracts status links, handle metadata, impressions, retweets, and verification status.
-- **Facebook**: Analyzes forwarded community alerts, neighborhood group posts, and viral counts.
-- **Web & News**: Accepts raw headlines, URLs, or free-form claims.
+### 1. Multimodal Media Ingestion (`backend/multimodal/`)
+
+> **New in v3.0.0**: The system no longer reads only captions. Every input goes through a full multimodal pipeline.
+
+| Signal | Source | Module |
+|---|---|---|
+| **🎙️ Audio Speech** | YouTube videos, Instagram Reels, uploaded video clips | `transcriber.py` → Whisper / faster-whisper ASR |
+| **🔍 On-Screen OCR Text** | Meme overlays, news chyrons, breaking banners, infographics | `ocr_engine.py` → Tesseract + EasyOCR |
+| **🎬 Video Frame Analysis** | Key frames sampled at even intervals for banner detection | `transcriber.py` → frame sampler |
+| **📺 YouTube Metadata** | Title, description, subtitles, channel, likes, views | `youtube_ingester.py` → yt-dlp |
+| **📊 Unified Synthesis** | All above signals merged into one prioritized fact-check claim | `synthesizer.py` |
+
+### 2. Multi-Platform Support
+- **Instagram**: Captures reel/post URLs, captions, engagement ratios.
+- **X (Twitter)**: Extracts status links, handle metadata, impressions, retweets, verification status.
+- **Facebook**: Analyzes forwarded community alerts, neighborhood group posts.
+- **YouTube** *(new)*: Full video/Short URL support — transcript, title, description, and frame OCR.
+- **Web & News**: Accepts raw headlines, URLs, or free-form text claims.
+- **Direct Upload**: Upload a screenshot, meme, infographic, or short video clip from your browser.
 
 ### 2. Multi-Language Categorized RSS Monitoring
 - Live asynchronous scraping across **Indian English**, **Hindi (हिन्दी)**, **Malayalam (മലയാളം)**, **Tamil (தமிழ்)**, and **Global** news sources.
@@ -78,9 +97,22 @@ Traditional fact-checking systems only classify veracity retrospectively. **Soci
 
 ```mermaid
 flowchart TD
-    A[Social Input: URL / Text / Headline] --> B{Platform Parser}
-    B -->|Instagram / X / Facebook / News| C[UnifiedPost Schema]
-    
+    A[Social Input: URL / Text / Image / Video] --> B{Input Router}
+    B -->|YouTube / Reel / Video / Image| MM[Multimodal Pipeline]
+    B -->|Text / X / Facebook / News| C[UnifiedPost Schema]
+
+    subgraph Multimodal Pipeline
+        MM --> M1[yt-dlp Video / Audio Extractor]
+        MM --> M2[Whisper Speech-to-Text ASR]
+        MM --> M3[Tesseract + EasyOCR Frame & Image OCR]
+        M1 --> M2
+        M1 --> M3
+        M2 --> M4[Claim Synthesizer]
+        M3 --> M4
+    end
+
+    M4 --> C
+
     subgraph Parallel Analysis Engine
         C --> D[Verification Pipeline]
         C --> E[Credibility Profiler]
@@ -108,6 +140,7 @@ flowchart TD
     
     H --> J[React + Vite Realtime Dashboard]
     I --> J
+    M4 -.->|Extracted Signals & Transcripts| J
 ```
 
 ---
@@ -131,6 +164,11 @@ Misinformation-Spread/
 │   │       └── schema.py       # Pydantic UnifiedPost model
 │   ├── diffusion/
 │   │   └── predictor.py        # Spread velocity & newsroom spillover forecaster
+│   ├── multimodal/             # 🎙️ Multimodal extraction engine
+│   │   ├── ocr_engine.py       # Tesseract + EasyOCR image/frame text reader
+│   │   ├── synthesizer.py      # Multi-signal fusion into unified claims
+│   │   ├── transcriber.py      # Whisper speech-to-text audio engine
+│   │   └── youtube_ingester.py # yt-dlp + youtube-transcript-api ingester
 │   ├── verification/
 │   │   ├── nli_classifier.py   # Natural language inference stance detection
 │   │   ├── pipeline.py         # Weighted source consensus pipeline
@@ -145,6 +183,7 @@ Misinformation-Spread/
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── AuthorProfile.jsx   # Author track record & metadata card
+│   │   │   ├── MultimodalCard.jsx  # 🎙️ Whisper, OCR, and YouTube intelligence card
 │   │   │   ├── RiskBadge.jsx       # Color-coded risk tier indicator
 │   │   │   ├── SourceBreakdown.jsx # Fact-check sources, stance, and links
 │   │   │   └── SpreadForecast.jsx  # Diffusion timeline, velocity & spillover charts
@@ -168,6 +207,8 @@ Misinformation-Spread/
 | :--- | :--- |
 | **Frontend** | React 19, Vite 8, TailwindCSS v4, Vanilla JavaScript (ESM) |
 | **Backend** | Python 3.10+, FastAPI, Uvicorn, Pydantic v2 |
+| **Multimodal AI** | Whisper / Faster-Whisper (ASR), Tesseract OCR, EasyOCR, Pillow |
+| **Media Extraction** | yt-dlp, youtube-transcript-api, OpenCV-compatible frame extractors |
 | **Machine Learning / NLP** | XGBoost, PyTorch, Hugging Face Transformers (RoBERTa), Scikit-Learn |
 | **Search & Ingestion** | DuckDuckGo Search (`ddgs`), Feedparser, BeautifulSoup4, HTTPX |
 | **Storage** | SQLite (`user_store.sqlite`) |
@@ -296,13 +337,20 @@ The backend API will be available at `http://localhost:8000`.
   - `category` *(optional)*: `Indian English`, `Hindi (हिन्दी)`, `Malayalam (മലയാളം)`, `Tamil (தமிழ்)`, or `Global`.
 - **Response**: Returns latest live headlines grouped by outlet and category with direct "Fact-Check & Predict" triggers.
 
-### 3. Social URL Extraction
-- **Endpoint**: `GET /extract-social?url=<URL>` or `POST /extract-social`
-- **Supported Platforms**: Instagram posts/reels, X / Twitter tweets, Facebook posts, generic web news articles.
+### 3. Multimodal Media Extraction (Images, Videos, YouTube)
+- **Endpoint**: `POST /extract-media`
+- **Supported Inputs**:
+  - Multipart Form: file upload (image or video) with optional `url` or `caption` fields.
+  - JSON Body: `{"url": "https://www.youtube.com/watch?v=...", "caption": "..."}`
+- **Response**: Extracted OCR text, Whisper speech-to-text transcript, sensational overlays detected, platform metadata, and synthesized unified fact-check claim.
 
-### 4. Health Check
+### 4. Social URL Extraction
+- **Endpoint**: `GET /extract-social?url=<URL>` or `POST /extract-social`
+- **Supported Platforms**: YouTube videos & Shorts, Instagram posts/reels, X / Twitter tweets, Facebook posts, and generic web articles.
+
+### 5. Health Check
 - **Endpoint**: `GET /health`
-- **Response**: `{"status": "ok", "version": "2.5.0"}`
+- **Response**: `{"status": "ok", "version": "3.0.0"}`
 
 ---
 
