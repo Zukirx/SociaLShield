@@ -796,6 +796,9 @@ function App() {
                 <RiskBadge
                   assessment={result.risk_assessment}
                   explanation={result.explanation}
+                  verdict={result.verdict}
+                  verdict_label={result.verdict_label}
+                  verdict_description={result.verdict_description}
                 />
                 {/* Multimodal Intelligence Card – shown when media was analysed */}
                 {result.multimodal_context && result.multimodal_context.has_media_analysis && (

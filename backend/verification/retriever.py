@@ -130,12 +130,34 @@ def _credibility_weight(url: str) -> float:
     return 0.5
 
 
+STOPWORDS = {
+    "about", "above", "after", "again", "against", "all", "and", "any", "are", "aren't",
+    "because", "been", "before", "being", "below", "between", "both", "but", "can", "cannot",
+    "could", "did", "didn't", "does", "doesn't", "doing", "don't", "down", "during", "each",
+    "few", "for", "from", "further", "had", "hadn't", "has", "hasn't", "have", "haven't",
+    "having", "here", "how", "into", "itself", "just", "more", "most", "must", "not", "off",
+    "once", "only", "other", "ought", "our", "ours", "out", "over", "own", "same", "should",
+    "some", "such", "than", "that", "the", "their", "them", "then", "there", "these", "they",
+    "this", "those", "through", "too", "under", "until", "very", "was", "wasn't", "were",
+    "weren't", "what", "when", "where", "which", "while", "who", "whom", "why", "with", "would",
+    "will", "says", "said", "post", "news", "today", "breaking", "video", "photo", "image",
+    "exclusive", "report", "latest", "update", "watch", "confirmed", "viral"
+}
+
+
 def _fetch_rss(source_name: str, feed_url: str, claim: str, limit: int = 3) -> list:
+    import re
     results = []
     try:
         feed = feedparser.parse(feed_url)
-        keywords = {w.lower() for w in claim.split() if len(w) > 3}
+        raw_words = [w.lower() for w in re.findall(r'\b[a-zA-Z0-9]{3,}\b', claim)]
+        keywords = [w for w in raw_words if w not in STOPWORDS]
+        if not keywords:
+            return []
+
         category = FEED_CATEGORIES.get(source_name, "General")
+        req_matches = 1 if len(keywords) == 1 else (2 if len(keywords) < 5 else 3)
+
         for entry in feed.entries:
             title = entry.get("title", "")
             summary = entry.get("summary", entry.get("description", ""))
@@ -143,8 +165,9 @@ def _fetch_rss(source_name: str, feed_url: str, claim: str, limit: int = 3) -> l
             text = (title + " " + summary).lower()
             if not link or not (summary or title):
                 continue
-            matched = any(kw in text for kw in keywords) if keywords else True
-            if matched:
+
+            matches = sum(1 for kw in keywords if kw in text)
+            if matches >= req_matches:
                 results.append({
                     "title": title,
                     "snippet": (summary or title)[:500],
@@ -163,12 +186,14 @@ def _fetch_rss(source_name: str, feed_url: str, claim: str, limit: int = 3) -> l
 
 def _fetch_ddg_text(claim: str, max_results: int = 8) -> list:
     results = []
+    # Strip URLs or platform handles if present
+    import re
+    clean = re.sub(r'https?://\S+|@\w+', '', claim).strip()[:150]
     queries = [
-        f"{claim} site:altnews.in OR site:boomlive.in OR site:vishvasnews.com OR site:thequint.com OR site:factcheck.org OR site:snopes.com",
-        f"{claim} site:reuters.com OR site:apnews.com OR site:thehindu.com OR site:ndtv.com OR site:indianexpress.com OR site:amarujala.com",
-        f"{claim} fact check",
-        f"{claim} news",
-        claim,
+        f"{clean} fact check debunked false hoax",
+        f"{clean} site:altnews.in OR site:boomlive.in OR site:vishvasnews.com OR site:factcheck.org OR site:snopes.com",
+        f"{clean} news",
+        clean,
     ]
     try:
         ddg = DDGS()

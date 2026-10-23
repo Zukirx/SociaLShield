@@ -646,7 +646,8 @@ async def analyze_post(
             ensemble.assess_risk,
             s_fact=verification_result["s_fact"],
             user_credibility=credibility,
-            diffusion_risk=diffusion_score
+            diffusion_risk=diffusion_score,
+            verdict=verification_result.get("verdict", "")
         )
 
         # 5. Explainability
@@ -660,6 +661,9 @@ async def analyze_post(
 
         return {
             "post": post.model_dump(),
+            "verdict": verification_result.get("verdict", "UNVERIFIED"),
+            "verdict_label": verification_result.get("verdict_label", ""),
+            "verdict_description": verification_result.get("verdict_description", ""),
             "credibility_score": credibility,
             "verification": verification_result,
             "diffusion": diffusion_analysis,
