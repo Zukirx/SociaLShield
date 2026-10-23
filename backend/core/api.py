@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
 import asyncio
@@ -20,7 +20,17 @@ from diffusion.predictor import analyze_spread_potential, calculate_diffusion_ri
 from core.ensemble import get_ensemble
 from core.explainability import generate_explanation
 
-app = FastAPI(title="SocialShield API", version="2.5.0")
+# Multimodal pipeline (graceful import – missing deps won't break the API)
+try:
+    from multimodal.youtube_ingester import extract_youtube, synthesize_youtube_text
+    from multimodal.ocr_engine import extract_text_from_image, detect_sensational_overlays
+    from multimodal.transcriber import transcribe_video_url, is_video_url
+    from multimodal.synthesizer import build_multimodal_context, synthesize_claim
+    MULTIMODAL_AVAILABLE = True
+except ImportError:
+    MULTIMODAL_AVAILABLE = False
+
+app = FastAPI(title="SocialShield API", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,12 +59,16 @@ class SocialExtractionResult(BaseModel):
     verified: bool = False
     success: bool = True
     message: str = ""
+    # Multimodal extras
+    youtube_data: dict = Field(default_factory=dict)
+    transcript: str = ""
+    ocr_text: str = ""
 
 
 class AnalyzePayload(BaseModel):
     text: Optional[str] = None
     url: Optional[str] = None
-    platform: Optional[str] = None  # "instagram", "twitter", "facebook", "news"
+    platform: Optional[str] = None  # "instagram", "twitter", "facebook", "youtube", "news"
     author_username: Optional[str] = None
     likes: Optional[int] = None
     shares: Optional[int] = None
@@ -64,6 +78,10 @@ class AnalyzePayload(BaseModel):
     verified: Optional[bool] = None
     account_age_days: Optional[int] = None
     post: Optional[UnifiedPost] = None
+    # Multimodal fields (passed from frontend after /extract-media)
+    ocr_text: Optional[str] = None
+    transcript: Optional[str] = None
+    image_b64: Optional[str] = None  # base64 image uploaded inline
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +265,7 @@ def extract_social_media(url_or_text: str) -> SocialExtractionResult:
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "2.5.0"}
+    return {"status": "ok", "version": "3.0.0", "multimodal": MULTIMODAL_AVAILABLE}
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +281,98 @@ async def extract_social_get(url: str):
 async def extract_social_post(payload: dict = Body(...)):
     url = payload.get("url") or payload.get("text", "")
     return extract_social_media(url)
+
+
+# ---------------------------------------------------------------------------
+# /extract-media  – upload image or video file for OCR / Whisper transcription
+# ---------------------------------------------------------------------------
+
+@app.post("/extract-media")
+async def extract_media(
+    file: Optional[UploadFile] = File(None),
+    url: Optional[str] = Form(None),
+):
+    """
+    Multimodal extraction endpoint.
+    Accepts either:
+     - A file upload (image/video) → OCR + Whisper transcription
+     - A URL (YouTube/Instagram Reel/etc.) → full multimodal pipeline
+
+    Returns: audio_transcript, ocr_text, sensational_overlays, synthesis
+    """
+    if not MULTIMODAL_AVAILABLE:
+        return {
+            "success": False,
+            "error": "Multimodal dependencies not installed. Run: pip install yt-dlp youtube-transcript-api pytesseract easyocr openai-whisper faster-whisper"
+        }
+
+    ocr_result = {}
+    transcription_result = {}
+    youtube_data = {}
+    caption = ""
+
+    # ── URL-based extraction (YouTube, Instagram video, etc.) ──
+    if url:
+        is_yt = "youtube.com" in url or "youtu.be" in url
+
+        if is_yt:
+            youtube_data = await asyncio.to_thread(extract_youtube, url)
+            caption = synthesize_youtube_text(youtube_data)
+        elif is_video_url(url):
+            transcription_result = await asyncio.to_thread(transcribe_video_url, url, True)
+            caption = url
+        else:
+            # Image URL – download and OCR
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=15) as client:
+                    img_resp = await client.get(url)
+                img_bytes = img_resp.content
+                ocr_result = await asyncio.to_thread(extract_text_from_image, img_bytes)
+                if ocr_result.get("text"):
+                    overlays = detect_sensational_overlays(ocr_result["text"])
+                    ocr_result["overlays"] = overlays
+            except Exception as e:
+                ocr_result = {"text": "", "engine": "none", "success": False, "error": str(e)}
+
+    # ── File upload (image or short video) ─────────────────────
+    elif file:
+        contents = await file.read()
+        mime = file.content_type or ""
+
+        if mime.startswith("image/"):
+            # OCR the uploaded image
+            ocr_result = await asyncio.to_thread(extract_text_from_image, contents)
+            if ocr_result.get("text"):
+                overlays = detect_sensational_overlays(ocr_result["text"])
+                ocr_result["overlays"] = overlays
+        elif mime.startswith("video/"):
+            # Save to temp file and transcribe
+            import tempfile, os
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+                tmp.write(contents)
+                tmp_path = tmp.name
+            try:
+                transcription_result = await asyncio.to_thread(
+                    transcribe_video_url, f"file://{tmp_path}", False
+                )
+            finally:
+                os.unlink(tmp_path)
+        else:
+            return {"success": False, "error": f"Unsupported file type: {mime}"}
+    else:
+        return {"success": False, "error": "Provide either a 'url' or a 'file'"}
+
+    # Build multimodal context
+    ctx = build_multimodal_context(
+        youtube_data=youtube_data,
+        ocr_result=ocr_result,
+        transcription_result=transcription_result,
+        caption=caption,
+        platform="youtube" if youtube_data else "news",
+    )
+    ctx["success"] = True
+    return ctx
 
 
 # ---------------------------------------------------------------------------
@@ -334,8 +444,11 @@ async def analyze_post(
     platform: Optional[str] = None
 ):
     """
-    Unified analysis endpoint supporting Instagram, X (Twitter), Facebook,
-    raw text claims, and live news articles.
+    Unified multimodal analysis endpoint supporting YouTube (Video/Shorts),
+    Instagram Reels/Posts, X (Twitter), Facebook, raw text claims, and
+    live news articles. Performs OCR on images, Whisper transcription on
+    video/audio, and runs all extracted signals through the multi-language
+    fact-verification and epidemic spread diffusion pipeline.
     """
     import uuid
 
@@ -375,7 +488,15 @@ async def analyze_post(
     elif text_override:
         text = text_override
 
+    # ── Multimodal pre-extraction from payload fields ──────────
+    # Caller may have already run /extract-media and passes transcript/ocr_text
+    pre_transcript = (payload.transcript or "") if payload else ""
+    pre_ocr = (payload.ocr_text or "") if payload else ""
+    pre_image_b64 = (payload.image_b64 or "") if payload else ""
+    mm_context: dict = {}
+
     # If text is empty but url is provided, or text itself is a URL:
+    extracted_mm: dict = {}   # store youtube_data from extraction for mm context
     if url or (text and re.match(r'^https?://[^\s]+$', text.strip())):
         extracted = extract_social_media(url or text.strip())
         if extracted.success:
@@ -397,6 +518,45 @@ async def analyze_post(
                 followers = extracted.followers
             if not verified and extracted.verified:
                 verified = extracted.verified
+            # Capture YouTube data and transcript for multimodal context
+            extracted_mm = extracted.youtube_data
+            if extracted.transcript and not pre_transcript:
+                pre_transcript = extracted.transcript
+
+    # ── Multimodal: OCR on inline image (base64) ──────────────
+    if pre_image_b64 and MULTIMODAL_AVAILABLE and not pre_ocr:
+        try:
+            ocr_r = await asyncio.to_thread(extract_text_from_image, pre_image_b64)
+            pre_ocr = ocr_r.get("text", "")
+        except Exception:
+            pass
+
+    # ── Build synthesized claim ────────────────────────────────
+    if MULTIMODAL_AVAILABLE and (pre_transcript or pre_ocr or extracted_mm):
+        synthesis = synthesize_claim(
+            caption=text or "",
+            ocr_text=pre_ocr,
+            audio_transcript=pre_transcript,
+            youtube_title=extracted_mm.get("title", "") if extracted_mm else "",
+            youtube_description=extracted_mm.get("description", "") if extracted_mm else "",
+            platform=target_platform,
+        )
+        verification_text = synthesis["synthesized_claim"] or text or ""
+        mm_context = build_multimodal_context(
+            youtube_data=extracted_mm or {},
+            ocr_result={"text": pre_ocr, "engine": "pre-extracted", "success": bool(pre_ocr)},
+            transcription_result={"transcript": pre_transcript, "engine": "pre-extracted", "success": bool(pre_transcript)},
+            caption=text or "",
+            platform=target_platform,
+        )
+    else:
+        verification_text = text or ""
+        if extracted_mm:
+            mm_context = build_multimodal_context(
+                youtube_data=extracted_mm,
+                caption=text or "",
+                platform=target_platform,
+            ) if MULTIMODAL_AVAILABLE else {}
 
     # Fallback to mock post if still empty
     if not text:
@@ -445,9 +605,12 @@ async def analyze_post(
         author_history=[]
     )
 
+    # Store verification_text for use inside try block
+    _vtext = locals().get("verification_text", text) or text
+
     try:
-        # 1. Fact Verification across news outlets & fact-checkers
-        verification_result = await asyncio.to_thread(verify_claim, post.text_content)
+        # 1. Fact Verification  – use synthesized multimodal claim if available
+        verification_result = await asyncio.to_thread(verify_claim, _vtext)
 
         # If it was a news link and user didn't specify author, derive from the first source
         if clean_platform == "news" and author_username == "Unknown Source" and verification_result.get("analyzed_sources"):
@@ -475,7 +638,7 @@ async def analyze_post(
             diffusion_risk=diffusion_score
         )
 
-        # 5. Explainability (incorporating local news risk)
+        # 5. Explainability
         explanation = await asyncio.to_thread(
             generate_explanation,
             risk_tier=risk_assessment["tier"],
@@ -492,6 +655,7 @@ async def analyze_post(
             "diffusion_risk": diffusion_score,  # backwards compatibility
             "risk_assessment": risk_assessment,
             "explanation": explanation,
+            "multimodal_context": mm_context,    # NEW: multimodal signals
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

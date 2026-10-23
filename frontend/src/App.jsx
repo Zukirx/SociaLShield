@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import RiskBadge from './components/RiskBadge';
 import SourceBreakdown from './components/SourceBreakdown';
 import AuthorProfile from './components/AuthorProfile';
 import SpreadForecast from './components/SpreadForecast';
+import MultimodalCard from './components/MultimodalCard';
 
 const API = 'http://localhost:8000';
 
@@ -19,6 +20,7 @@ const PLATFORMS = [
   { id: 'instagram', label: 'Instagram', icon: '📸', color: 'from-pink-500 to-purple-600', placeholder: 'Paste Instagram post / reel URL, caption, or neighborhood reel claim...' },
   { id: 'twitter', label: 'X (Twitter)', icon: '𝕏', color: 'from-slate-800 to-black', placeholder: 'Paste X / Twitter post URL (e.g. https://x.com/user/status/...) or tweet text...' },
   { id: 'facebook', label: 'Facebook', icon: '👥', color: 'from-blue-600 to-blue-800', placeholder: 'Paste Facebook post / community group URL or forwarded citizen post...' },
+  { id: 'youtube', label: 'YouTube', icon: '▶️', color: 'from-red-600 to-red-800', placeholder: 'Paste YouTube video / Short URL (e.g. https://youtube.com/watch?v=...) – transcript & frames will be analysed...' },
   { id: 'news', label: 'Web & News', icon: '🌐', color: 'from-[#8b4513] to-[#5c4033]', placeholder: 'Paste a news headline, web article URL, or general claim...' },
 ];
 
@@ -69,6 +71,18 @@ const PRESETS = [
     views: 34000,
     comments: 180,
     followers: 18000,
+    verified: false,
+  },
+  {
+    title: '▶️ YouTube Fact-Check Demo',
+    platform: 'youtube',
+    author: 'BreakingClaimsTV',
+    text: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    likes: 8500,
+    shares: 2200,
+    views: 180000,
+    comments: 640,
+    followers: 95000,
     verified: false,
   }
 ];
@@ -255,6 +269,13 @@ function App() {
   const [followers, setFollowers] = useState(15000);
   const [isVerified, setIsVerified] = useState(false);
 
+  // Multimodal file upload state
+  const [uploadedFile, setUploadedFile] = useState(null);   // { file, preview, type, name }
+  const [mmData, setMmData] = useState(null);               // extracted OCR/transcript from uploaded file
+  const [isAnalysingMedia, setIsAnalysingMedia] = useState(false);
+  const [mediaMsg, setMediaMsg] = useState(null);
+  const fileInputRef = useRef(null);
+
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractMsg, setExtractMsg] = useState(null);
@@ -280,6 +301,8 @@ function App() {
         detectedPlat = 'instagram';
       } else if (url.includes('facebook.com') || url.includes('fb.watch')) {
         detectedPlat = 'facebook';
+      } else if (url.includes('youtube.com') || url.includes('youtu.be')) {
+        detectedPlat = 'youtube';
       }
       setSelectedPlatform(detectedPlat);
     }
@@ -331,11 +354,59 @@ function App() {
     setFollowers(preset.followers);
     setIsVerified(preset.verified);
     setExtractMsg(`Loaded preset: ${preset.title}`);
+    setUploadedFile(null);
+    setMmData(null);
+    setMediaMsg(null);
+  };
+
+  // Handle image/video file upload → call /extract-media for OCR + transcription
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const isImage = file.type.startsWith('image/');
+    const isVideo = file.type.startsWith('video/');
+    if (!isImage && !isVideo) {
+      setMediaMsg('⚠️ Only image or video files are supported.');
+      return;
+    }
+
+    const preview = isImage ? URL.createObjectURL(file) : null;
+    setUploadedFile({ file, preview, type: isImage ? 'image' : 'video', name: file.name });
+    setMmData(null);
+    setMediaMsg(`📎 ${file.name} attached – click "Analyse Media" to extract text/speech.`);
+  };
+
+  const handleAnalyseMedia = async () => {
+    if (!uploadedFile) return;
+    setIsAnalysingMedia(true);
+    setMediaMsg('🔬 Extracting text and speech from media...');
+    try {
+      const formData = new FormData();
+      formData.append('file', uploadedFile.file);
+      const res = await fetch(`${API}/extract-media`, { method: 'POST', body: formData });
+      if (!res.ok) throw new Error('Media extraction failed');
+      const data = await res.json();
+      if (data.success) {
+        setMmData(data);
+        // Pre-fill caption from OCR / synthesis if input is empty
+        if (!inputText && data.synthesis?.synthesized_claim) {
+          setInputText(data.synthesis.synthesized_claim.substring(0, 500));
+        }
+        setMediaMsg(`✓ Media analysed: ${data.ocr_text ? 'OCR text' : ''} ${data.audio_transcript ? '+ audio transcript' : ''} extracted.`);
+      } else {
+        setMediaMsg(`⚠️ ${data.error || 'Media analysis unavailable'}`);
+      }
+    } catch (err) {
+      setMediaMsg(`⚠️ ${err.message}`);
+    } finally {
+      setIsAnalysingMedia(false);
+    }
   };
 
   const handleAnalyze = async (overrideText, overridePlatform) => {
     const textToAnalyze = overrideText || inputText;
-    if (!textToAnalyze) return;
+    if (!textToAnalyze && !uploadedFile) return;
 
     setLoading(true);
     setError(null);
@@ -353,6 +424,9 @@ function App() {
         comments: Number(comments) || 0,
         followers: Number(followers) || 0,
         verified: Boolean(isVerified),
+        // Pass pre-extracted multimodal data
+        transcript: mmData?.audio_transcript || '',
+        ocr_text: mmData?.ocr_text || '',
       };
 
       const response = await fetch(`${API}/analyze`, {
@@ -488,6 +562,99 @@ function App() {
             )}
           </div>
 
+          {/* ── Multimodal Media Upload Zone ── */}
+          <div className="border-2 border-dashed border-violet-300 rounded-xl p-4 bg-violet-50 hover:border-violet-500 transition-colors">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-violet-100 rounded-xl flex items-center justify-center text-xl flex-shrink-0">
+                  🖼️
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-violet-800">Upload Image or Video</div>
+                  <div className="text-xs text-violet-600 mt-0.5">
+                    Screenshot · Meme · Reel · News clip → OCR + Speech-to-Text extraction
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,video/*"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                  id="media-upload-input"
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="text-xs px-3 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 transition-colors font-semibold cursor-pointer shadow-sm"
+                >
+                  📁 Choose File
+                </button>
+                {uploadedFile && (
+                  <button
+                    onClick={handleAnalyseMedia}
+                    disabled={isAnalysingMedia}
+                    className="text-xs px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors font-semibold cursor-pointer shadow-sm flex items-center gap-1.5"
+                  >
+                    {isAnalysingMedia ? (
+                      <>
+                        <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                        Analysing...
+                      </>
+                    ) : '🔬 Analyse Media'}
+                  </button>
+                )}
+                {uploadedFile && (
+                  <button
+                    onClick={() => { setUploadedFile(null); setMmData(null); setMediaMsg(null); }}
+                    className="text-xs text-violet-600 hover:text-red-600 font-semibold cursor-pointer"
+                  >
+                    ✕ Remove
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Preview + status */}
+            {(uploadedFile || mediaMsg) && (
+              <div className="mt-3 flex items-center gap-3">
+                {uploadedFile?.preview && (
+                  <img src={uploadedFile.preview} alt="Preview" className="w-16 h-10 object-cover rounded-lg border border-violet-300 shadow-sm flex-shrink-0" />
+                )}
+                {uploadedFile && !uploadedFile.preview && (
+                  <div className="w-16 h-10 bg-violet-200 rounded-lg flex items-center justify-center text-2xl flex-shrink-0">🎬</div>
+                )}
+                {mediaMsg && (
+                  <div className={`text-xs font-medium flex-1 ${mmData ? 'text-emerald-700' : 'text-violet-700'}`}>
+                    {mediaMsg}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Show brief summary of what was extracted */}
+            {mmData && (
+              <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {[
+                  { label: 'Audio', value: mmData.audio_transcript ? `${mmData.audio_transcript.split(' ').length} words` : 'None', icon: '🎙️', active: !!mmData.audio_transcript },
+                  { label: 'OCR Text', value: mmData.ocr_text ? `${mmData.ocr_text.split(' ').length} words` : 'None', icon: '🔍', active: !!mmData.ocr_text },
+                  { label: 'Overlays', value: mmData.sensational_overlays?.length ? `${mmData.sensational_overlays.length} alerts` : 'None', icon: '⚠️', active: !!mmData.sensational_overlays?.length },
+                  { label: 'Claim', value: mmData.synthesis?.word_count ? `${mmData.synthesis.word_count} words` : 'Building...', icon: '📊', active: !!mmData.synthesis?.synthesized_claim },
+                ].map(({ label, value, icon, active }) => (
+                  <div key={label} className={`p-2 rounded-lg text-center text-xs border ${active ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}`}>
+                    <div className="text-base">{icon}</div>
+                    <div className={`font-bold mt-0.5 ${active ? 'text-emerald-700' : 'text-slate-400'}`}>{value}</div>
+                    <div className="text-slate-500">{label}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Expandable Engagement & Virality Settings */}
           <div>
             <button
@@ -574,7 +741,7 @@ function App() {
 
             <button
               onClick={() => handleAnalyze()}
-              disabled={loading || !inputText}
+              disabled={loading || (!inputText && !uploadedFile)}
               className="px-6 py-3 bg-[#8b4513] hover:bg-[#5c4033] disabled:bg-[#e0d4c8] disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-lg shadow-[#8b4513]/25 transition-all transform active:scale-95 flex items-center gap-2 cursor-pointer"
             >
               {loading ? (
@@ -615,7 +782,7 @@ function App() {
                 </span>
               </div>
               <button
-                onClick={() => { setResult(null); setInputText(''); }}
+                onClick={() => { setResult(null); setInputText(''); setUploadedFile(null); setMmData(null); setMediaMsg(null); }}
                 className="text-xs text-[#8b4513] hover:underline font-bold cursor-pointer"
               >
                 ← Clear / New Verification
@@ -630,6 +797,10 @@ function App() {
                   assessment={result.risk_assessment}
                   explanation={result.explanation}
                 />
+                {/* Multimodal Intelligence Card – shown when media was analysed */}
+                {result.multimodal_context && result.multimodal_context.has_media_analysis && (
+                  <MultimodalCard multimodal_context={result.multimodal_context} />
+                )}
                 <SpreadForecast
                   diffusion={result.diffusion}
                   diffusion_risk={result.diffusion_risk}

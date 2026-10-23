@@ -6,3 +6,12 @@ transformers==4.33.1
 scikit-learn==1.3.0
 numpy==1.25.2
 xgboost==1.7.6
+httpx==0.25.0
+# ── Multimodal Pipeline (optional – install for full media analysis) ──
+# yt-dlp            # YouTube / video download & metadata extraction
+# youtube-transcript-api  # Subtitle/caption fallback (no yt-dlp required)
+# faster-whisper    # CPU-optimised Whisper ASR (speech-to-text)
+# openai-whisper    # Alternative: full OpenAI Whisper
+# pytesseract       # OCR engine (requires Tesseract binary: https://github.com/tesseract-ocr/tesseract)
+# easyocr           # GPU-capable OCR fallback
+# Pillow            # Image processing (required for OCR)

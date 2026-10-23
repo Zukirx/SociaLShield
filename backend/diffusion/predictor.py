@@ -85,10 +85,10 @@ def analyze_spread_potential(post) -> dict:
 
     # --- 2. Engagement Velocity & Social Platform Multiplier ---
     platform_multipliers = {
-        "instagram": 1.25,
-        "twitter": 1.30,
-        "facebook": 1.20,
-        "youtube": 1.05,
+        "instagram": 1.30,   # Reels / short-form visual – highest organic virality
+        "twitter": 1.30,     # X/Twitter – rapid text + media resharing
+        "facebook": 1.20,    # Community groups, shares, Watch videos
+        "youtube": 1.20,     # YouTube Shorts treated at Instagram-level virality
         "reddit": 0.95,
         "news": 0.80,
     }
